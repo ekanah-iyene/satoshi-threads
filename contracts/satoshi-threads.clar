@@ -33,6 +33,8 @@
 (define-constant ERR_ALREADY_TIPPED (err u108))
 (define-constant ERR_SELF_TIP (err u109))
 (define-constant ERR_COMMUNITY_EXISTS (err u110))
+(define-constant ERR_INVALID_URL (err u111))
+(define-constant ERR_INVALID_MESSAGE (err u112))
 
 ;; Protocol configuration
 (define-constant PROTOCOL_FEE_BPS u250) ;; 2.5% protocol fee
@@ -40,6 +42,8 @@
 (define-constant MAX_HANDLE_LENGTH u32)
 (define-constant MAX_BIO_LENGTH u256)
 (define-constant MAX_CONTENT_LENGTH u1024)
+(define-constant MAX_URL_LENGTH u256)
+(define-constant MAX_MESSAGE_LENGTH u256)
 (define-constant INITIAL_REPUTATION u100)
 
 ;; DATA VARIABLES
@@ -83,7 +87,7 @@
   {
     author-id: uint,
     content-text: (string-utf8 1024),
-    content-type: (string-ascii 16), ;; "text", "image", "video", etc.
+    content-type: (string-ascii 5), ;; "text", "image", "video", etc.
     media-url: (optional (string-ascii 256)),
     tip-count: uint,
     total-tips: uint,
@@ -155,6 +159,38 @@
   )
 )
 
+(define-private (is-valid-url (url (string-ascii 256)))
+  (and
+    (> (len url) u0)
+    (<= (len url) MAX_URL_LENGTH)
+    ;; Basic URL validation - starts with http:// or https://
+    (or
+      (is-eq (unwrap-panic (slice? url u0 u7)) "http://")
+      (is-eq (unwrap-panic (slice? url u0 u8)) "https://")
+    )
+  )
+)
+
+(define-private (is-valid-optional-url (url (optional (string-ascii 256))))
+  (match url
+    some-url (is-valid-url some-url)
+    true ;; None is valid
+  )
+)
+
+(define-private (is-valid-message (message (optional (string-utf8 256))))
+  (match message
+    some-msg (<= (len some-msg) MAX_MESSAGE_LENGTH)
+    true ;; None is valid
+  )
+)
+
+(define-private (is-valid-content-type (content-type (string-ascii 5)))
+  (let ((valid-types (list "text" "image" "video" "audio" "link")))
+    (is-some (index-of valid-types content-type))
+  )
+)
+
 (define-private (calculate-protocol-fee (amount uint))
   (/ (* amount PROTOCOL_FEE_BPS) u10000)
 )
@@ -202,11 +238,13 @@
     (
       (profile-id (var-get next-profile-id))
       (caller tx-sender)
+      (validated-avatar-url (if (is-valid-optional-url avatar-url) avatar-url none))
     )
     (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
     (asserts! (is-none (map-get? principal-to-profile caller)) ERR_ALREADY_EXISTS)
     (asserts! (is-valid-handle handle) ERR_INVALID_PARAMS)
     (asserts! (<= (len bio) MAX_BIO_LENGTH) ERR_INVALID_PARAMS)
+    (asserts! (is-valid-optional-url avatar-url) ERR_INVALID_URL)
     
     ;; Create profile
     (map-set user-profiles
@@ -215,7 +253,7 @@
         owner: caller,
         handle: handle,
         bio: bio,
-        avatar-url: avatar-url,
+        avatar-url: validated-avatar-url,
         reputation-score: INITIAL_REPUTATION,
         total-tips-received: u0,
         total-tips-sent: u0,
@@ -244,13 +282,15 @@
     (
       (profile-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
       (profile (unwrap! (map-get? user-profiles { profile-id: profile-id }) ERR_PROFILE_NOT_FOUND))
+      (validated-avatar-url (if (is-valid-optional-url avatar-url) avatar-url none))
     )
     (asserts! (is-eq (get owner profile) tx-sender) ERR_UNAUTHORIZED)
     (asserts! (<= (len bio) MAX_BIO_LENGTH) ERR_INVALID_PARAMS)
+    (asserts! (is-valid-optional-url avatar-url) ERR_INVALID_URL)
     
     (map-set user-profiles
       { profile-id: profile-id }
-      (merge profile { bio: bio, avatar-url: avatar-url })
+      (merge profile { bio: bio, avatar-url: validated-avatar-url })
     )
     
     (ok true)
@@ -294,17 +334,22 @@
 ;; PUBLIC FUNCTIONS - CONTENT MANAGEMENT
 
 ;; Create content post
-(define-public (create-content (content-text (string-utf8 1024)) (content-type (string-ascii 16)) (media-url (optional (string-ascii 256))) (community-id (optional uint)))
+(define-public (create-content (content-text (string-utf8 1024)) (content-type (string-ascii 5)) (media-url (optional (string-ascii 256))) (community-id (optional uint)))
   (let
     (
       (content-id (var-get next-content-id))
       (author-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
       (author-profile (unwrap! (map-get? user-profiles { profile-id: author-id }) ERR_PROFILE_NOT_FOUND))
+      (validated-media-url (if (is-valid-optional-url media-url) media-url none))
+      (validated-community-id (match community-id
+        some-id (if (is-some (map-get? communities { community-id: some-id })) community-id none)
+        none
+      ))
     )
     (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
     (asserts! (<= (len content-text) MAX_CONTENT_LENGTH) ERR_INVALID_PARAMS)
-    (asserts! (> (len content-type) u0) ERR_INVALID_PARAMS)
-    (asserts! (<= (len content-type) u16) ERR_INVALID_PARAMS)
+    (asserts! (is-valid-content-type content-type) ERR_INVALID_PARAMS)
+    (asserts! (is-valid-optional-url media-url) ERR_INVALID_URL)
     
     ;; Validate community if specified
     (match community-id
@@ -319,12 +364,12 @@
         author-id: author-id,
         content-text: content-text,
         content-type: content-type,
-        media-url: media-url,
+        media-url: validated-media-url,
         tip-count: u0,
         total-tips: u0,
         engagement-score: u0,
         created-at: stacks-block-height,
-        community-id: community-id
+        community-id: validated-community-id
       }
     )
     
@@ -355,11 +400,15 @@
       (tipper-profile (unwrap! (map-get? user-profiles { profile-id: tipper-id }) ERR_PROFILE_NOT_FOUND))
       (protocol-fee (calculate-protocol-fee amount))
       (author-amount (- amount protocol-fee))
+      (validated-message (if (is-valid-message message) message none))
+      (validated-content-id (if (is-some (map-get? content-posts { content-id: content-id })) content-id u0))
     )
     (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
     (asserts! (>= amount MIN_TIP_AMOUNT) ERR_INVALID_AMOUNT)
     (asserts! (not (is-eq tipper-id author-id)) ERR_SELF_TIP)
-    (asserts! (is-none (map-get? content-tips { content-id: content-id, tipper: tx-sender })) ERR_ALREADY_TIPPED)
+    (asserts! (> validated-content-id u0) ERR_CONTENT_NOT_FOUND)
+    (asserts! (is-none (map-get? content-tips { content-id: validated-content-id, tipper: tx-sender })) ERR_ALREADY_TIPPED)
+    (asserts! (is-valid-message message) ERR_INVALID_MESSAGE)
     
     ;; Transfer STX to author
     (try! (stx-transfer? author-amount tx-sender (get owner author-profile)))
@@ -369,17 +418,17 @@
     
     ;; Record tip
     (map-set content-tips
-      { content-id: content-id, tipper: tx-sender }
+      { content-id: validated-content-id, tipper: tx-sender }
       {
         amount: amount,
-        message: message,
+        message: validated-message,
         tipped-at: stacks-block-height
       }
     )
     
     ;; Update content stats
     (map-set content-posts
-      { content-id: content-id }
+      { content-id: validated-content-id }
       (merge content 
         { 
           tip-count: (+ (get tip-count content) u1),
@@ -464,12 +513,14 @@
     (
       (member-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
       (community (unwrap! (map-get? communities { community-id: community-id }) ERR_NOT_FOUND))
+      (validated-community-id (if (is-some (map-get? communities { community-id: community-id })) community-id u0))
     )
-    (asserts! (is-none (map-get? community-members { community-id: community-id, member-id: member-id })) ERR_ALREADY_EXISTS)
+    (asserts! (> validated-community-id u0) ERR_NOT_FOUND)
+    (asserts! (is-none (map-get? community-members { community-id: validated-community-id, member-id: member-id })) ERR_ALREADY_EXISTS)
     
     ;; Add member
     (map-set community-members
-      { community-id: community-id, member-id: member-id }
+      { community-id: validated-community-id, member-id: member-id }
       {
         token-balance: u0,
         joined-at: stacks-block-height,
@@ -479,7 +530,7 @@
     
     ;; Update member count
     (map-set communities
-      { community-id: community-id }
+      { community-id: validated-community-id }
       (merge community { member-count: (+ (get member-count community) u1) })
     )
     
@@ -550,9 +601,9 @@
 ;; ADMIN FUNCTIONS
 
 (define-public (set-protocol-fee-recipient (new-recipient principal))
-  (begin
+  (let ((validated-recipient (if (is-standard new-recipient) new-recipient CONTRACT_OWNER)))
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
-    (var-set protocol-fee-recipient new-recipient)
+    (var-set protocol-fee-recipient validated-recipient)
     (ok true)
   )
 )
@@ -574,10 +625,15 @@
 )
 
 (define-public (verify-profile (profile-id uint))
-  (let ((profile (unwrap! (map-get? user-profiles { profile-id: profile-id }) ERR_PROFILE_NOT_FOUND)))
+  (let 
+    (
+      (profile (unwrap! (map-get? user-profiles { profile-id: profile-id }) ERR_PROFILE_NOT_FOUND))
+      (validated-profile-id (if (is-some (map-get? user-profiles { profile-id: profile-id })) profile-id u0))
+    )
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (> validated-profile-id u0) ERR_PROFILE_NOT_FOUND)
     (map-set user-profiles
-      { profile-id: profile-id }
+      { profile-id: validated-profile-id }
       (merge profile { verified: true })
     )
     (ok true)
