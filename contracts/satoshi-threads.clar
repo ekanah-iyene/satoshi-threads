@@ -92,3 +92,94 @@
     community-id: (optional uint)
   }
 )
+
+;; Tip records for content monetization
+(define-map content-tips
+  { content-id: uint, tipper: principal }
+  {
+    amount: uint,
+    message: (optional (string-utf8 256)),
+    tipped-at: uint
+  }
+)
+
+;; Social connections (following/followers)
+(define-map social-connections
+  { follower-id: uint, following-id: uint }
+  { connected-at: uint }
+)
+
+;; Community governance tokens
+(define-map communities
+  { community-id: uint }
+  {
+    name: (string-ascii 64),
+    description: (string-utf8 256),
+    creator-id: uint,
+    token-symbol: (string-ascii 8),
+    total-supply: uint,
+    member-count: uint,
+    created-at: uint,
+    governance-threshold: uint
+  }
+)
+
+;; Community membership and token balances
+(define-map community-members
+  { community-id: uint, member-id: uint }
+  {
+    token-balance: uint,
+    joined-at: uint,
+    is-moderator: bool
+  }
+)
+
+;; Engagement tracking for reputation
+(define-map user-engagement
+  { profile-id: uint, period: uint } ;; period = stacks-block-height / 2016 (weekly)
+  {
+    tips-received: uint,
+    tips-sent: uint,
+    content-posted: uint,
+    engagement-score: uint
+  }
+)
+
+;; PRIVATE FUNCTIONS
+
+(define-private (is-valid-handle (handle (string-ascii 32)))
+  (and 
+    (> (len handle) u0)
+    (<= (len handle) MAX_HANDLE_LENGTH)
+    (is-none (map-get? handle-to-profile handle))
+  )
+)
+
+(define-private (calculate-protocol-fee (amount uint))
+  (/ (* amount PROTOCOL_FEE_BPS) u10000)
+)
+
+(define-private (get-current-period)
+  (/ stacks-block-height u2016) ;; Weekly periods
+)
+
+(define-private (update-reputation (profile-id uint) (points uint))
+  (let ((profile (unwrap! (map-get? user-profiles { profile-id: profile-id }) false)))
+    (map-set user-profiles
+      { profile-id: profile-id }
+      (merge profile { reputation-score: (+ (get reputation-score profile) points) })
+    )
+    true
+  )
+)
+
+(define-private (update-engagement (profile-id uint) (tips-received uint) (tips-sent uint) (content-posted uint))
+  (let 
+    (
+      (period (get-current-period))
+      (current-engagement (default-to 
+        { tips-received: u0, tips-sent: u0, content-posted: u0, engagement-score: u0 }
+        (map-get? user-engagement { profile-id: profile-id, period: period })
+      ))
+    )
+    (map-set user-engagement
