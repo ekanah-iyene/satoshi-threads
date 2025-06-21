@@ -183,7 +183,7 @@
       ))
     )
     (map-set user-engagement
-    { profile-id: profile-id, period: period }
+      { profile-id: profile-id, period: period }
       {
         tips-received: (+ (get tips-received current-engagement) tips-received),
         tips-sent: (+ (get tips-sent current-engagement) tips-sent),
@@ -274,7 +274,7 @@
       { follower-id: follower-id, following-id: following-id }
       { connected-at: stacks-block-height }
     )
-
+    
     ;; Update follower count
     (map-set user-profiles
       { profile-id: follower-id }
@@ -303,6 +303,8 @@
     )
     (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
     (asserts! (<= (len content-text) MAX_CONTENT_LENGTH) ERR_INVALID_PARAMS)
+    (asserts! (> (len content-type) u0) ERR_INVALID_PARAMS)
+    (asserts! (<= (len content-type) u16) ERR_INVALID_PARAMS)
     
     ;; Validate community if specified
     (match community-id
@@ -364,7 +366,7 @@
     
     ;; Transfer protocol fee
     (try! (stx-transfer? protocol-fee tx-sender (var-get protocol-fee-recipient)))
-
+    
     ;; Record tip
     (map-set content-tips
       { content-id: content-id, tipper: tx-sender }
@@ -419,6 +421,10 @@
     (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
     (asserts! (> initial-supply u0) ERR_INVALID_PARAMS)
     (asserts! (> (len name) u0) ERR_INVALID_PARAMS)
+    (asserts! (<= (len name) u64) ERR_INVALID_PARAMS)
+    (asserts! (<= (len description) u256) ERR_INVALID_PARAMS)
+    (asserts! (> (len token-symbol) u0) ERR_INVALID_PARAMS)
+    (asserts! (<= (len token-symbol) u8) ERR_INVALID_PARAMS)
     
     ;; Create community
     (map-set communities
