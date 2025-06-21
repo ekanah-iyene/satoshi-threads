@@ -183,3 +183,94 @@
       ))
     )
     (map-set user-engagement
+    { profile-id: profile-id, period: period }
+      {
+        tips-received: (+ (get tips-received current-engagement) tips-received),
+        tips-sent: (+ (get tips-sent current-engagement) tips-sent),
+        content-posted: (+ (get content-posted current-engagement) content-posted),
+        engagement-score: (+ (get engagement-score current-engagement) tips-received tips-sent content-posted)
+      }
+    )
+  )
+)
+
+;; PUBLIC FUNCTIONS - PROFILE MANAGEMENT
+
+;; Create a new user profile (on-chain identity)
+(define-public (create-profile (handle (string-ascii 32)) (bio (string-utf8 256)) (avatar-url (optional (string-ascii 256))))
+  (let
+    (
+      (profile-id (var-get next-profile-id))
+      (caller tx-sender)
+    )
+    (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
+    (asserts! (is-none (map-get? principal-to-profile caller)) ERR_ALREADY_EXISTS)
+    (asserts! (is-valid-handle handle) ERR_INVALID_PARAMS)
+    (asserts! (<= (len bio) MAX_BIO_LENGTH) ERR_INVALID_PARAMS)
+    
+    ;; Create profile
+    (map-set user-profiles
+      { profile-id: profile-id }
+      {
+        owner: caller,
+        handle: handle,
+        bio: bio,
+        avatar-url: avatar-url,
+        reputation-score: INITIAL_REPUTATION,
+        total-tips-received: u0,
+        total-tips-sent: u0,
+        content-count: u0,
+        follower-count: u0,
+        following-count: u0,
+        created-at: stacks-block-height,
+        verified: false
+      }
+    )
+    
+    ;; Map handle and principal to profile
+    (map-set handle-to-profile handle profile-id)
+    (map-set principal-to-profile caller profile-id)
+    
+    ;; Increment profile counter
+    (var-set next-profile-id (+ profile-id u1))
+    
+    (ok profile-id)
+  )
+)
+
+;; Update profile information
+(define-public (update-profile (bio (string-utf8 256)) (avatar-url (optional (string-ascii 256))))
+  (let
+    (
+      (profile-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
+      (profile (unwrap! (map-get? user-profiles { profile-id: profile-id }) ERR_PROFILE_NOT_FOUND))
+    )
+    (asserts! (is-eq (get owner profile) tx-sender) ERR_UNAUTHORIZED)
+    (asserts! (<= (len bio) MAX_BIO_LENGTH) ERR_INVALID_PARAMS)
+    
+    (map-set user-profiles
+      { profile-id: profile-id }
+      (merge profile { bio: bio, avatar-url: avatar-url })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Follow another user
+(define-public (follow-user (target-handle (string-ascii 32)))
+  (let
+    (
+      (follower-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
+      (following-id (unwrap! (map-get? handle-to-profile target-handle) ERR_PROFILE_NOT_FOUND))
+      (follower-profile (unwrap! (map-get? user-profiles { profile-id: follower-id }) ERR_PROFILE_NOT_FOUND))
+      (following-profile (unwrap! (map-get? user-profiles { profile-id: following-id }) ERR_PROFILE_NOT_FOUND))
+    )
+    (asserts! (not (is-eq follower-id following-id)) ERR_INVALID_PARAMS)
+    (asserts! (is-none (map-get? social-connections { follower-id: follower-id, following-id: following-id })) ERR_ALREADY_EXISTS)
+    
+    ;; Create connection
+    (map-set social-connections
+      { follower-id: follower-id, following-id: following-id }
+      { connected-at: stacks-block-height }
+    )
