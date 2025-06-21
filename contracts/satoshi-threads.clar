@@ -451,3 +451,92 @@
     (ok community-id)
   )
 )
+
+;; Join community (requires invitation or open membership)
+(define-public (join-community (community-id uint))
+  (let
+    (
+      (member-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
+      (community (unwrap! (map-get? communities { community-id: community-id }) ERR_NOT_FOUND))
+    )
+    (asserts! (is-none (map-get? community-members { community-id: community-id, member-id: member-id })) ERR_ALREADY_EXISTS)
+    
+    ;; Add member
+    (map-set community-members
+      { community-id: community-id, member-id: member-id }
+      {
+        token-balance: u0,
+        joined-at: stacks-block-height,
+        is-moderator: false
+      }
+    )
+    
+    ;; Update member count
+    (map-set communities
+      { community-id: community-id }
+      (merge community { member-count: (+ (get member-count community) u1) })
+    )
+    
+    (ok true)
+  )
+)
+
+;; READ-ONLY FUNCTIONS
+
+(define-read-only (get-profile-by-id (profile-id uint))
+  (map-get? user-profiles { profile-id: profile-id })
+)
+
+(define-read-only (get-profile-by-handle (handle (string-ascii 32)))
+  (match (map-get? handle-to-profile handle)
+    some-id (map-get? user-profiles { profile-id: some-id })
+    none
+  )
+)
+
+(define-read-only (get-profile-by-principal (user principal))
+  (match (map-get? principal-to-profile user)
+    some-id (map-get? user-profiles { profile-id: some-id })
+    none
+  )
+)
+
+(define-read-only (get-content (content-id uint))
+  (map-get? content-posts { content-id: content-id })
+)
+
+(define-read-only (get-tip (content-id uint) (tipper principal))
+  (map-get? content-tips { content-id: content-id, tipper: tipper })
+)
+
+(define-read-only (is-following (follower-handle (string-ascii 32)) (following-handle (string-ascii 32)))
+  (match (map-get? handle-to-profile follower-handle)
+    follower-id (match (map-get? handle-to-profile following-handle)
+      following-id (is-some (map-get? social-connections { follower-id: follower-id, following-id: following-id }))
+      false
+    )
+    false
+  )
+)
+
+(define-read-only (get-community (community-id uint))
+  (map-get? communities { community-id: community-id })
+)
+
+(define-read-only (get-community-member (community-id uint) (member-id uint))
+  (map-get? community-members { community-id: community-id, member-id: member-id })
+)
+
+(define-read-only (get-user-engagement (profile-id uint) (period uint))
+  (map-get? user-engagement { profile-id: profile-id, period: period })
+)
+
+(define-read-only (get-protocol-stats)
+  {
+    total-profiles: (- (var-get next-profile-id) u1),
+    total-content: (- (var-get next-content-id) u1),
+    total-communities: (- (var-get next-community-id) u1),
+    protocol-fee-bps: PROTOCOL_FEE_BPS,
+    protocol-paused: (var-get protocol-paused)
+  }
+)
