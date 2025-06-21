@@ -540,3 +540,40 @@
     protocol-paused: (var-get protocol-paused)
   }
 )
+
+;; ADMIN FUNCTIONS
+
+(define-public (set-protocol-fee-recipient (new-recipient principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set protocol-fee-recipient new-recipient)
+    (ok true)
+  )
+)
+
+(define-public (pause-protocol)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set protocol-paused true)
+    (ok true)
+  )
+)
+
+(define-public (unpause-protocol)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (var-set protocol-paused false)
+    (ok true)
+  )
+)
+
+(define-public (verify-profile (profile-id uint))
+  (let ((profile (unwrap! (map-get? user-profiles { profile-id: profile-id }) ERR_PROFILE_NOT_FOUND)))
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (map-set user-profiles
+      { profile-id: profile-id }
+      (merge profile { verified: true })
+    )
+    (ok true)
+  )
+)
