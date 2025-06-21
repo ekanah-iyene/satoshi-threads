@@ -364,3 +364,90 @@
     
     ;; Transfer protocol fee
     (try! (stx-transfer? protocol-fee tx-sender (var-get protocol-fee-recipient)))
+
+    ;; Record tip
+    (map-set content-tips
+      { content-id: content-id, tipper: tx-sender }
+      {
+        amount: amount,
+        message: message,
+        tipped-at: stacks-block-height
+      }
+    )
+    
+    ;; Update content stats
+    (map-set content-posts
+      { content-id: content-id }
+      (merge content 
+        { 
+          tip-count: (+ (get tip-count content) u1),
+          total-tips: (+ (get total-tips content) amount),
+          engagement-score: (+ (get engagement-score content) u1)
+        }
+      )
+    )
+    
+    ;; Update user profiles
+    (map-set user-profiles
+      { profile-id: author-id }
+      (merge author-profile { total-tips-received: (+ (get total-tips-received author-profile) author-amount) })
+    )
+    
+    (map-set user-profiles
+      { profile-id: tipper-id }
+      (merge tipper-profile { total-tips-sent: (+ (get total-tips-sent tipper-profile) amount) })
+    )
+    
+    ;; Update engagement and reputation
+    (update-engagement author-id amount u0 u0)
+    (update-engagement tipper-id u0 amount u0)
+    (update-reputation author-id (/ amount u1000)) ;; Reputation points based on tips
+    
+    (ok true)
+  )
+)
+
+;; PUBLIC FUNCTIONS - COMMUNITY GOVERNANCE
+
+;; Create a new community with social token
+(define-public (create-community (name (string-ascii 64)) (description (string-utf8 256)) (token-symbol (string-ascii 8)) (initial-supply uint))
+  (let
+    (
+      (community-id (var-get next-community-id))
+      (creator-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
+    )
+    (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
+    (asserts! (> initial-supply u0) ERR_INVALID_PARAMS)
+    (asserts! (> (len name) u0) ERR_INVALID_PARAMS)
+    
+    ;; Create community
+    (map-set communities
+      { community-id: community-id }
+      {
+        name: name,
+        description: description,
+        creator-id: creator-id,
+        token-symbol: token-symbol,
+        total-supply: initial-supply,
+        member-count: u1,
+        created-at: stacks-block-height,
+        governance-threshold: (/ initial-supply u2) ;; 50% threshold
+      }
+    )
+    
+    ;; Add creator as first member with all tokens
+    (map-set community-members
+      { community-id: community-id, member-id: creator-id }
+      {
+        token-balance: initial-supply,
+        joined-at: stacks-block-height,
+        is-moderator: true
+      }
+    )
+    
+    ;; Increment community counter
+    (var-set next-community-id (+ community-id u1))
+    
+    (ok community-id)
+  )
+)
