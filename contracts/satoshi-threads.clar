@@ -274,3 +274,93 @@
       { follower-id: follower-id, following-id: following-id }
       { connected-at: stacks-block-height }
     )
+
+    ;; Update follower count
+    (map-set user-profiles
+      { profile-id: follower-id }
+      (merge follower-profile { following-count: (+ (get following-count follower-profile) u1) })
+    )
+    
+    ;; Update following count
+    (map-set user-profiles
+      { profile-id: following-id }
+      (merge following-profile { follower-count: (+ (get follower-count following-profile) u1) })
+    )
+    
+    (ok true)
+  )
+)
+
+;; PUBLIC FUNCTIONS - CONTENT MANAGEMENT
+
+;; Create content post
+(define-public (create-content (content-text (string-utf8 1024)) (content-type (string-ascii 16)) (media-url (optional (string-ascii 256))) (community-id (optional uint)))
+  (let
+    (
+      (content-id (var-get next-content-id))
+      (author-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
+      (author-profile (unwrap! (map-get? user-profiles { profile-id: author-id }) ERR_PROFILE_NOT_FOUND))
+    )
+    (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
+    (asserts! (<= (len content-text) MAX_CONTENT_LENGTH) ERR_INVALID_PARAMS)
+    
+    ;; Validate community if specified
+    (match community-id
+      some-community-id (asserts! (is-some (map-get? communities { community-id: some-community-id })) ERR_NOT_FOUND)
+      true ;; Return true when no community specified
+    )
+    
+    ;; Create content post
+    (map-set content-posts
+      { content-id: content-id }
+      {
+        author-id: author-id,
+        content-text: content-text,
+        content-type: content-type,
+        media-url: media-url,
+        tip-count: u0,
+        total-tips: u0,
+        engagement-score: u0,
+        created-at: stacks-block-height,
+        community-id: community-id
+      }
+    )
+    
+    ;; Update author's content count
+    (map-set user-profiles
+      { profile-id: author-id }
+      (merge author-profile { content-count: (+ (get content-count author-profile) u1) })
+    )
+    
+    ;; Update engagement tracking
+    (update-engagement author-id u0 u0 u1)
+    
+    ;; Increment content counter
+    (var-set next-content-id (+ content-id u1))
+    
+    (ok content-id)
+  )
+)
+
+;; Tip content with STX
+(define-public (tip-content (content-id uint) (amount uint) (message (optional (string-utf8 256))))
+  (let
+    (
+      (content (unwrap! (map-get? content-posts { content-id: content-id }) ERR_CONTENT_NOT_FOUND))
+      (tipper-id (unwrap! (map-get? principal-to-profile tx-sender) ERR_PROFILE_NOT_FOUND))
+      (author-id (get author-id content))
+      (author-profile (unwrap! (map-get? user-profiles { profile-id: author-id }) ERR_PROFILE_NOT_FOUND))
+      (tipper-profile (unwrap! (map-get? user-profiles { profile-id: tipper-id }) ERR_PROFILE_NOT_FOUND))
+      (protocol-fee (calculate-protocol-fee amount))
+      (author-amount (- amount protocol-fee))
+    )
+    (asserts! (not (var-get protocol-paused)) ERR_UNAUTHORIZED)
+    (asserts! (>= amount MIN_TIP_AMOUNT) ERR_INVALID_AMOUNT)
+    (asserts! (not (is-eq tipper-id author-id)) ERR_SELF_TIP)
+    (asserts! (is-none (map-get? content-tips { content-id: content-id, tipper: tx-sender })) ERR_ALREADY_TIPPED)
+    
+    ;; Transfer STX to author
+    (try! (stx-transfer? author-amount tx-sender (get owner author-profile)))
+    
+    ;; Transfer protocol fee
+    (try! (stx-transfer? protocol-fee tx-sender (var-get protocol-fee-recipient)))
